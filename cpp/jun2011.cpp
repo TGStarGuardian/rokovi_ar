@@ -1,242 +1,188 @@
 #include <iostream>
-#include <memory>
 #include <vector>
-#include <string>
+#include <memory>
 #include <map>
+#include <string>
 
-// za dva atoma treba proveriti da li
-// uopstena supstitucija je njihov unifikator
-// samo uradimo supstituciju na oba
-// ako dobijemo isto, super
-// ako ne, nije super
-
-class Term;
-using T = std::shared_ptr<Term>;
-
-class Term : public std::enable_shared_from_this<Term> {
-	public:
-		virtual void print(std::ostream&) = 0;
-		friend std::ostream& operator<<(std::ostream& os, T& t) {
-			t->print(os);
-			return os;
-		}
-		
-		virtual bool operator==(const T&) const = 0;
-		
-		friend bool operator==(const T& t1, const T& t2) {
-			return *t1 == t2;
-		}
-		
-		class Comp {
-			public:
-				bool operator()(const T& t1, const T& t2) const {
-					return t1 == t2;
-			}
-		};
-		
-		virtual T substitute(const T&, const T&) = 0;
-
+struct Term;
+using TermPtr = std::shared_ptr<Term>;
+using VariableTerm = std::string;
+struct FunctionTerm {
+	std::string f;
+	std::vector<TermPtr> args;
 
 };
 
-class ConstantTerm : public Term {
-	public:
-		ConstantTerm(std::string& n): name(n) {}
+struct Term {
+	enum Type{
+		Variable,
+		Function
+	} type;
+	union {
+		VariableTerm var;
+		FunctionTerm fun;
+	};
+
+	Term(VariableTerm t) : type(Variable), var(t) {}
+	Term(FunctionTerm t) : type(Function), fun(t) {}
+	~Term() {
+		switch(type) {
+			case Variable: var.~basic_string();
+			case Function: fun.~FunctionTerm();
 		
-		void print(std::ostream& os) {
-			os << name;
-		}
-		
-		std::string get_name() {
-			return name;
-		}
-		
-		bool operator==(const T& t) const {
-			auto x = std::dynamic_pointer_cast<ConstantTerm>(t);
-			return x != nullptr && x->get_name() == name;
-		
-		}
-		
-		T substitute(const T&, const T&) {
-			return shared_from_this();
 		}
 	
-	
-	private:
-		std::string name;
+	}
+}; 
+
+struct AtomData {
+	std::string symbol;
+	std::vector<TermPtr> args;
+
 };
 
+using Substitution = std::map<std::string, TermPtr>;
 
-class VariableTerm : public Term {
-	public:
-		VariableTerm(std::string& n): name(n) {}
-		
-		void print(std::ostream& os) {
-			os << name;
-		}
-		
-		std::string get_name() {
-			return name;
-		}
-		
-		bool operator==(const T& t) const {
-			auto x = std::dynamic_pointer_cast<VariableTerm>(t);
-			return x != nullptr && x->get_name() == name;
-		
-		}
-		
-		T substitute(const T& t1, const T& t2) {
-			auto x = std::dynamic_pointer_cast<VariableTerm>(t1);
-			if(x == nullptr || x->get_name() != name) return shared_from_this();
-			return t2;
-		}
-	
-	
-	private:
-		std::string name;
-};
+TermPtr VariableT(std::string s) { return std::make_shared<Term>(VariableTerm{s}); }
+TermPtr FunctionT(std::string s, std::vector<TermPtr> t) {
+	return std::make_shared<Term>(FunctionTerm{s, t});
+}
+AtomData Atom(std::string s, std::vector<TermPtr> argm) { return AtomData{s, argm}; }
 
-class FunctionTerm : public Term {
-	public:
-		FunctionTerm(std::string& s, std::vector<T>& a):
-			symbol(s), args(a) {}
-			
-		void print(std::ostream& os) {
-			os << symbol << '(';
-			for(unsigned i = 0; i < args.size(); i++) {
-				os << args[i] << ((i == args.size() - 1)? ")" : ", ");
-			}
-		}
-		
-		std::string get_symbol() {
-			return symbol;
-		}
-		
-		std::vector<T> get_args() {
-			return args;
-		}
-		
-		friend bool operator==(const std::vector<T>& t1, const std::vector<T>& t2) {
-			if(t1.size() != t2.size()) return false;
-			
-			auto it1 = t1.begin(), it2 = t2.begin();
-			
-			for(; it1 != t1.end() && it2 != t2.end(); ++it1, ++it2) {
-				if(*it1 != *it2) return false;
-			}
-			
-			return true;
-		}
-		
-		bool operator==(const T& t) const {
-			auto x = std::dynamic_pointer_cast<FunctionTerm>(t);
-			return x != nullptr && x->get_symbol() == symbol && x->get_args() == args;
-		
-		}
-		
-		T substitute(const T& t1, const T& t2) {
-			std::vector<T> new_args = {};
-			
-			for(const auto& a : args) {
-				new_args.push_back(a->substitute(t1, t2));
-			}
-			
-			return std::make_shared<FunctionTerm>(symbol, new_args);
-		}
-	
-	
-	private:
-		std::string symbol;
-		std::vector<T> args;
-};
+TermPtr substitute(TermPtr term, Substitution s){
+	switch(term->type) {
+	case Term::Variable: return s.find(term->var) != s.end() ? s.at(term->var) : term;
+	case Term::Function: 
+		std::vector<TermPtr> sub;
+		for(auto& t1 : term->fun.args)
+			sub.push_back(substitute(t1, s));
+		return FunctionT(term->fun.f, sub);
+	}
+}
 
-class Atom;
-using A = std::shared_ptr<Atom>;
 
-class Atom {
-	public:
-		Atom(std::string& s, std::vector<T>& a):
-			symbol(s), args(a) {}
-			
-		void print(std::ostream& os) {
-			os << symbol << '(';
-			for(unsigned i = 0; i < args.size(); i++) {
-				os << args[i] << ((i == args.size() - 1)? ")" : ", ");
-			}
+AtomData substitute(AtomData atom, Substitution s) {
+	AtomData subA(atom);
+	for(auto& arg : subA.args) {
+		auto x = substitute(arg, s);
+		arg.swap(x);
+	}
+		
+	return subA;	
+}
+
+bool equal(TermPtr a, TermPtr b) {
+	if(a->type != b->type)
+		return false;
+	switch(a->type) {
+	case Term::Variable: return a->var == b->var;
+	case Term::Function: {
+		if(a->fun.f != b->fun.f)
+   			return false;
+		if(a->fun.args.size() != b->fun.args.size())
+			return false;
+		
+		/*
+		for(auto& arg : a->fun.args)
+			for(auto& arg1 : b->fun.args)
+				if(!equal(arg, arg1))
+					return false;
+		*/
+		
+			// ovako treba
+		for(int i = 0; i < a->fun.args.size(); i++) {
+			if(!equal(a->fun.args[i], b->fun.args[i])) return false;
 		}
 		
-		friend std::ostream& operator<<(std::ostream& os, A& a) {
-			a->print(os);
-			return os;
+		return true;	
+	}
+
+	}
+
+}
+
+bool equal(AtomData A, AtomData B) {
+	if(A.symbol != B.symbol)
+		return false;
+	if(A.args.size() != B.args.size())
+		return false;
+
+	/* nikako ne ovako...
+	jer ovako si zapravo proveravala da li su
+	svaka dva ista
+	for(auto& a : A.args){
+		for(auto& b : B.args) {
+			if(!equal(a, b))
+				return false;
 		}
-		
-		std::string get_symbol() {
-			return symbol;
-		}
-		
-		std::vector<T> get_args() {
-			return args;
-		}
-		
-		bool operator==(const A& a) const {
-			return a->get_symbol() == symbol && a->get_args() == args;
-		}
-		
-		friend bool operator==(const A& a1, const A& a2) {
-			return *a1 == a2;
-		}
-		
-		A substitute(const T& t1, const T& t2) {
-			std::vector<T> new_args;
-			// samo prosledimo svakom termu
-			for(const auto& t : args) {
-				new_args.push_back(t->substitute(t1, t2));
-			}
-			return std::make_shared<Atom>(symbol, new_args);
-		}
-		
-		friend bool is_unifiable(A& a1, A& a2, std::map<T, T>& unifier) {
-			// samo unifikatorom posmenjujemo u oba
-			for(auto it = unifier.begin(); it != unifier.end(); ++it) {
-				a1->substitute(it->first, it->second);
-				a2->substitute(it->first, it->second);
-			} 
-			return a1 == a2;
-		}
+	}
+	*/
 	
+	// ovako treba
+	for(int i = 0; i < A.args.size(); i++) {
+		if(!equal(A.args[i], B.args[i])) return false;
+	}
 	
-	private:
-		std::string symbol;
-		std::vector<T> args;
-};
+	return true;
+}
+
+void print(const TermPtr& t) {
+	switch(t->type) {
+	case Term::Variable:
+		std::cout << t->var;
+		return;
+	case Term::Function:
+		std::cout << t->fun.f << '(';
+		for(const auto& a : t->fun.args) {
+			print(a);
+			std::cout << ", ";
+		}
+		std::cout << ')';
+		return;
+	}
+}
+
+void print(const AtomData& a) {
+	std::cout << a.symbol << '(';
+	for(const auto& a : a.args) {
+		print(a);
+		std::cout << ", ";
+	}
+	std::cout << ')';
+}
+
+bool unify(AtomData A, AtomData B, Substitution s){
+	AtomData subA = substitute(A, s);
+	AtomData subB = substitute(B, s);
+	
+	print(subA);
+	std::cout << '\n';
+	print(subB);
+	std::cout << '\n';
+	/*
+	if(equal(subA, subB))
+		return true;
+	return false;
+	*/
+	// cistije je ovako
+	return equal(subA, subB);
+}
+
 
 
 int main() {
+	AtomData A = Atom("p", {VariableT("x"), FunctionT("f", {VariableT("x")})});
+	AtomData B = Atom("p", {VariableT("y"), FunctionT("f", {VariableT("y")})});
 
-	std::string x1 = "x";
-	std::string c1 = "c";
-	std::string y1 = "y";
-	std::string f = "f";
+	Substitution s;
+	s["x"] = VariableT("y");
 
-	T x = std::make_shared<VariableTerm>(x1);
-	T c = std::make_shared<VariableTerm>(c1);
-	T y = std::make_shared<VariableTerm>(y1);
-	std::vector<T> v1 = {x, y};
-	std::vector<T> v2 = {x, y};
-	T f1 = std::make_shared<FunctionTerm>(f, v1);
-	T f2 = std::make_shared<FunctionTerm>(f, v2);
-	
-
-	std::cout << x << '\n' << c << '\n' << y << '\n' << f1 << '\n';
-	std::cout << (f1 == f2) << '\n' << (f1 == c) << '\n';
-	std::map<T, T> unifier;
-	
-	std::vector<T> a_args = {x, y, f1};
-	std::string p1 = "p";
-	A a = std::make_shared<Atom>(p1, a_args);
-	std::cout << a << '\n';
-	A a1 = a->substitute(x, c);
-	std::cout << a1 << '\n';
+	if(unify(A, B, s))
+		std::cout << "yes";
+	else
+		std::cout<< "no";
+		
 
 	return 0;
+
 }
